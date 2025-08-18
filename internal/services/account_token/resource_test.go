@@ -277,3 +277,59 @@ func TestAccAccountToken_Resources_SimpleToNested_NoDrift(t *testing.T) {
 		},
 	})
 }
+
+// Our API can hand back policies in a different order than provided, which can
+// confuse the provider into thinking their is drift.
+func TestAccAccountToken_PolicyOrderDoesntMatter(t *testing.T) {
+	rnd := utils.GenerateRandomResourceName()
+	name := "cloudflare_account_token.policy-order-test"
+	accountID := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
+
+	zoneReadPermissionGroupId := "c8fed203ed3043cba015a93ad1616f1f"
+	zoneWritePermissionGroupId := "e6d2666161e84845a636613608cee8d5"
+
+	build := func(permissionId1, permissionId2 string) string {
+		return acctest.LoadTestCase("account_token-policy-order.tf", rnd, accountID, permissionId1, permissionId2)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.TestAccPreCheck(t) },
+		ProtoV6ProviderFactories: acctest.TestAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: build(zoneReadPermissionGroupId, zoneWritePermissionGroupId),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(name, "name", rnd),
+					resource.TestCheckResourceAttr(name, "policies.0.permission_groups.0.id", zoneReadPermissionGroupId),
+					resource.TestCheckResourceAttr(name, "policies.1.permission_groups.0.id", zoneWritePermissionGroupId),
+				),
+			},
+			{
+				Config: build(zoneReadPermissionGroupId, zoneWritePermissionGroupId),
+				// re-applying same change does not produce drift
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectEmptyPlan(),
+					},
+				},
+			},
+			{
+				Config: build(zoneWritePermissionGroupId, zoneReadPermissionGroupId),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(name, "name", rnd),
+					resource.TestCheckResourceAttr(name, "policies.0.permission_groups.0.id", zoneWritePermissionGroupId),
+					resource.TestCheckResourceAttr(name, "policies.1.permission_groups.0.id", zoneReadPermissionGroupId),
+				),
+			},
+			{
+				Config: build(zoneWritePermissionGroupId, zoneReadPermissionGroupId),
+				// re-applying same change does not produce drift
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectEmptyPlan(),
+					},
+				},
+			},
+		},
+	})
+}
